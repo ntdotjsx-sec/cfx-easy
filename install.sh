@@ -1,7 +1,6 @@
 #!/bin/bash
 # ============================================================
 #  FiveM Server Auto-Installer for Ubuntu
-#  Usage: bash <(curl -sSL https://raw.githubusercontent.com/YOUR/REPO/main/install.sh)
 # ============================================================
 
 set -e
@@ -33,6 +32,39 @@ CHANGELOG_API="https://changelogs-live.fivem.net/api/changelog/versions/linux/se
 
 header "FiveM Server Installer"
 warn "Install location: $INSTALL_DIR  (user: $CURRENT_USER)"
+
+# ── FTP check ────────────────────────────────────────────────
+header "Checking FTP Server"
+if command -v vsftpd &>/dev/null || command -v proftpd &>/dev/null || command -v pure-ftpd &>/dev/null; then
+  log "FTP server already installed — skipping"
+else
+  warn "No FTP server detected"
+  echo -ne "${YELLOW}  ติดตั้ง vsftpd (FTP server) ด้วยไหม? [y/N]: ${NC}"
+  read -r FTP_ANSWER </dev/tty
+  if [[ "$FTP_ANSWER" =~ ^[Yy]$ ]]; then
+    apt-get install -y -qq vsftpd > /dev/null
+
+    # config vsftpd — local users, write enabled, no anonymous
+    cat > /etc/vsftpd.conf << 'FTPCFG'
+listen=YES
+listen_ipv6=NO
+anonymous_enable=NO
+local_enable=YES
+write_enable=YES
+local_umask=022
+chroot_local_user=YES
+allow_writeable_chroot=YES
+secure_chroot_dir=/var/run/vsftpd/empty
+pam_service_name=vsftpd
+FTPCFG
+
+    systemctl enable vsftpd --now > /dev/null
+    log "vsftpd installed and started (port 21)"
+    warn "เปิด port 21 ใน firewall ด้วย: sudo ufw allow 21/tcp"
+  else
+    warn "Skipping FTP installation"
+  fi
+fi
 
 # ── Dependencies ─────────────────────────────────────────────
 header "Installing Dependencies"
