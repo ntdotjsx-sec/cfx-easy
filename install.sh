@@ -1,6 +1,7 @@
 #!/bin/bash
 # ============================================================
 #  FiveM Server Auto-Installer for Ubuntu
+#  Usage: bash <(curl -sSL https://raw.githubusercontent.com/YOUR/REPO/main/install.sh)
 # ============================================================
 
 set -e
@@ -16,21 +17,22 @@ warn()   { echo -e "${YELLOW}[!]${NC} $1"; }
 error()  { echo -e "${RED}[✘]${NC} $1"; exit 1; }
 header() { echo -e "\n${CYAN}══════════════════════════════════════${NC}"; echo -e "${CYAN}  $1${NC}"; echo -e "${CYAN}══════════════════════════════════════${NC}"; }
 
-# ── Config ──────────────────────────────────────────────────
-INSTALL_DIR="$(pwd)/FXServer"
-SERVER_DIR="$INSTALL_DIR/server"
-DATA_DIR="$INSTALL_DIR/server-data"
-CHANGELOG_API="https://changelogs-live.fivem.net/api/changelog/versions/linux/server"
-CURRENT_USER="${SUDO_USER:-$USER}"
-# ────────────────────────────────────────────────────────────
-
-header "FiveM Server Installer"
-warn "Install location: $INSTALL_DIR"
-
-# ── Root check ──────────────────────────────────────────────
+# ── Root check (ก่อน config เพราะต้องรู้ SUDO_USER) ─────────
 if [[ $EUID -ne 0 ]]; then
   error "Please run as root: sudo bash install.sh"
 fi
+
+# ── Config ──────────────────────────────────────────────────
+CURRENT_USER="${SUDO_USER:-$USER}"
+USER_HOME=$(getent passwd "$CURRENT_USER" | cut -d: -f6)
+INSTALL_DIR="$USER_HOME/FXServer"
+SERVER_DIR="$INSTALL_DIR/server"
+DATA_DIR="$INSTALL_DIR/server-data"
+CHANGELOG_API="https://changelogs-live.fivem.net/api/changelog/versions/linux/server"
+# ────────────────────────────────────────────────────────────
+
+header "FiveM Server Installer"
+warn "Install location: $INSTALL_DIR  (user: $CURRENT_USER)"
 
 # ── Dependencies ─────────────────────────────────────────────
 header "Installing Dependencies"
@@ -127,22 +129,57 @@ fi
 # ── Start scripts ────────────────────────────────────────────
 header "Creating Start Scripts"
 
+# start.sh — with auto-restart loop
 cat > "$INSTALL_DIR/start.sh" << STARTEOF
 #!/bin/bash
+# ── FiveM Auto-Restart Wrapper ──────────────────
+CRASHES=0
+MAX_CRASHES=10
+CRASH_WINDOW=300   # วินาที — ถ้า crash เกิน MAX_CRASHES ใน window นี้ จะหยุด
+
 cd "$SERVER_DIR"
-exec bash run.sh +exec "$DATA_DIR/server.cfg"
+
+while true; do
+  START_TIME=\$(date +%s)
+  echo "[FiveM] Starting server... (crashes so far: \$CRASHES)"
+
+  bash run.sh +exec "$DATA_DIR/server.cfg"
+  EXIT_CODE=\$?
+
+  END_TIME=\$(date +%s)
+  UPTIME=\$((END_TIME - START_TIME))
+
+  echo "[FiveM] Server exited (code: \$EXIT_CODE, uptime: \${UPTIME}s)"
+
+  # Reset crash counter ถ้า server อยู่ได้นานกว่า CRASH_WINDOW
+  if [[ \$UPTIME -ge \$CRASH_WINDOW ]]; then
+    CRASHES=0
+  fi
+
+  CRASHES=\$((CRASHES + 1))
+
+  if [[ \$CRASHES -ge \$MAX_CRASHES ]]; then
+    echo "[FiveM] Too many crashes (\$CRASHES). Giving up."
+    exit 1
+  fi
+
+  echo "[FiveM] Restarting in 5 seconds..."
+  sleep 5
+done
 STARTEOF
 chmod +x "$INSTALL_DIR/start.sh"
 
+# screen-start.sh
 cat > "$INSTALL_DIR/screen-start.sh" << SCREENEOF
 #!/bin/bash
 screen -dmS fivem bash "$INSTALL_DIR/start.sh"
 echo "Started in screen 'fivem' — attach: screen -r fivem"
 SCREENEOF
 chmod +x "$INSTALL_DIR/screen-start.sh"
-log "start.sh and screen-start.sh created"
 
-# ── Fix ownership to the user who ran sudo ───────────────────
+log "start.sh (auto-restart) and screen-start.sh created"
+
+# ── Fix ownership ────────────────────────────────────────────
 chown -R "$CURRENT_USER":"$CURRENT_USER" "$INSTALL_DIR"
 log "Ownership set to $CURRENT_USER"
 
@@ -157,7 +194,7 @@ After=network.target
 Type=simple
 User=$CURRENT_USER
 WorkingDirectory=$SERVER_DIR
-ExecStart=$SERVER_DIR/run.sh +exec $DATA_DIR/server.cfg
+ExecStart=$INSTALL_DIR/start.sh
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
