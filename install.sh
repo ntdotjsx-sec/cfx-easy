@@ -1,7 +1,6 @@
 #!/bin/bash
 # ============================================================
 #  FiveM Server Auto-Installer for Ubuntu
-#  Usage: bash <(curl -sSL https://raw.githubusercontent.com/YOUR/REPO/main/install.sh)
 # ============================================================
 
 set -e
@@ -18,13 +17,15 @@ error()  { echo -e "${RED}[✘]${NC} $1"; exit 1; }
 header() { echo -e "\n${CYAN}══════════════════════════════════════${NC}"; echo -e "${CYAN}  $1${NC}"; echo -e "${CYAN}══════════════════════════════════════${NC}"; }
 
 # ── Config ──────────────────────────────────────────────────
-INSTALL_DIR="/home/fivem/FXServer"
+INSTALL_DIR="$(pwd)/FXServer"
 SERVER_DIR="$INSTALL_DIR/server"
 DATA_DIR="$INSTALL_DIR/server-data"
 CHANGELOG_API="https://changelogs-live.fivem.net/api/changelog/versions/linux/server"
+CURRENT_USER="${SUDO_USER:-$USER}"
 # ────────────────────────────────────────────────────────────
 
 header "FiveM Server Installer"
+warn "Install location: $INSTALL_DIR"
 
 # ── Root check ──────────────────────────────────────────────
 if [[ $EUID -ne 0 ]]; then
@@ -39,21 +40,14 @@ apt-get install -y -qq \
   screen tar jq > /dev/null
 log "Dependencies installed"
 
-# ── Create fivem user ────────────────────────────────────────
-header "Setting Up User & Directories"
-if ! id "fivem" &>/dev/null; then
-  useradd -m -s /bin/bash fivem
-  log "User 'fivem' created"
-else
-  warn "User 'fivem' already exists"
-fi
+# ── Create directories ───────────────────────────────────────
+header "Setting Up Directories"
 mkdir -p "$SERVER_DIR" "$DATA_DIR"
 log "Directories created: $INSTALL_DIR"
 
 # ── Resolve artifact download URL ────────────────────────────
 header "Resolving Latest FiveM Artifacts"
 
-# Allow override via environment variable
 if [[ -n "$FIVEM_BUILD_URL" ]]; then
   DOWNLOAD_URL="$FIVEM_BUILD_URL"
   warn "Using manually set FIVEM_BUILD_URL: $DOWNLOAD_URL"
@@ -65,7 +59,6 @@ else
     error "Could not reach $CHANGELOG_API\nManually set the URL and retry:\n  export FIVEM_BUILD_URL='https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/XXXXX-hash/fx.tar.xz'"
   fi
 
-  # Use jq if available (installed above), otherwise grep fallback
   if command -v jq &>/dev/null; then
     RECOMMENDED_BUILD=$(echo "$CHANGELOG_JSON" | jq -r '.recommended')
     DOWNLOAD_URL=$(echo "$CHANGELOG_JSON"       | jq -r '.recommended_download')
@@ -149,8 +142,9 @@ SCREENEOF
 chmod +x "$INSTALL_DIR/screen-start.sh"
 log "start.sh and screen-start.sh created"
 
-# ── Fix ownership ────────────────────────────────────────────
-chown -R fivem:fivem "$INSTALL_DIR"
+# ── Fix ownership to the user who ran sudo ───────────────────
+chown -R "$CURRENT_USER":"$CURRENT_USER" "$INSTALL_DIR"
+log "Ownership set to $CURRENT_USER"
 
 # ── systemd service ──────────────────────────────────────────
 header "Creating systemd Service"
@@ -161,7 +155,7 @@ After=network.target
 
 [Service]
 Type=simple
-User=fivem
+User=$CURRENT_USER
 WorkingDirectory=$SERVER_DIR
 ExecStart=$SERVER_DIR/run.sh +exec $DATA_DIR/server.cfg
 Restart=on-failure
@@ -188,6 +182,6 @@ echo "     https://keymaster.fivem.net"
 echo ""
 echo "  ── Start commands ──────────────────────────"
 echo "  systemd : sudo systemctl start fivem"
-echo "  screen  : sudo -u fivem $INSTALL_DIR/screen-start.sh"
+echo "  screen  : $INSTALL_DIR/screen-start.sh"
 echo "  logs    : sudo journalctl -u fivem -f"
 echo -e "${NC}"
