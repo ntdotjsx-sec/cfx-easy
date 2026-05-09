@@ -21,7 +21,7 @@ header() { echo -e "\n${CYAN}═════════════════
 INSTALL_DIR="/home/fivem/FXServer"
 SERVER_DIR="$INSTALL_DIR/server"
 DATA_DIR="$INSTALL_DIR/server-data"
-ARTIFACTS_BASE="https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master"
+CHANGELOG_API="https://changelogs-live.fivem.net/api/changelog/versions/linux/server"
 # ────────────────────────────────────────────────────────────
 
 header "FiveM Server Installer"
@@ -50,40 +50,40 @@ fi
 mkdir -p "$SERVER_DIR" "$DATA_DIR"
 log "Directories created: $INSTALL_DIR"
 
-# ── Get latest artifact (parse href list) ────────────────────
-header "Downloading Latest FiveM Artifacts"
+# ── Resolve artifact download URL ────────────────────────────
+header "Resolving Latest FiveM Artifacts"
 
-# ดึง HTML list แล้ว grep เอา build number
-LATEST=$(curl -sSL "$ARTIFACTS_BASE/" \
-  | grep -oP '\d{4,6}-[0-9a-f]+' \
-  | sort -t- -k1 -n \
-  | tail -1)
+# Allow override via environment variable
+if [[ -n "$FIVEM_BUILD_URL" ]]; then
+  DOWNLOAD_URL="$FIVEM_BUILD_URL"
+  warn "Using manually set FIVEM_BUILD_URL: $DOWNLOAD_URL"
+else
+  warn "Fetching build info from changelog API..."
+  CHANGELOG_JSON=$(curl -sSL --max-time 15 "$CHANGELOG_API" 2>/dev/null)
 
-# fallback: ลอง .json endpoint
-if [[ -z "$LATEST" ]]; then
-  warn "HTML parse failed, trying JSON endpoint..."
-  LATEST=$(curl -sSL "$ARTIFACTS_BASE/latest.json" 2>/dev/null \
-    | grep -oP '"version"\s*:\s*"\K[^"]+' | head -1)
+  if [[ -z "$CHANGELOG_JSON" ]]; then
+    error "Could not reach $CHANGELOG_API\nManually set the URL and retry:\n  export FIVEM_BUILD_URL='https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/XXXXX-hash/fx.tar.xz'"
+  fi
+
+  # Use jq if available (installed above), otherwise grep fallback
+  if command -v jq &>/dev/null; then
+    RECOMMENDED_BUILD=$(echo "$CHANGELOG_JSON" | jq -r '.recommended')
+    DOWNLOAD_URL=$(echo "$CHANGELOG_JSON"       | jq -r '.recommended_download')
+  else
+    RECOMMENDED_BUILD=$(echo "$CHANGELOG_JSON" | grep -oP '"recommended"\s*:\s*"\K[^"]+' | head -1)
+    DOWNLOAD_URL=$(echo "$CHANGELOG_JSON"       | grep -oP '"recommended_download"\s*:\s*"\K[^"]+' | head -1)
+  fi
+
+  if [[ -z "$DOWNLOAD_URL" || "$DOWNLOAD_URL" == "null" ]]; then
+    error "Could not parse recommended_download from changelog API.\nJSON snippet:\n$(echo "$CHANGELOG_JSON" | head -c 500)"
+  fi
+
+  log "Recommended build : $RECOMMENDED_BUILD"
 fi
 
-# fallback2: hardcode recommended build
-if [[ -z "$LATEST" ]]; then
-  warn "JSON failed too, using known-good build..."
-  # ดึง recommended จาก artifacts page text
-  LATEST=$(curl -sSL "https://changelogs-live.fivem.net/api/changelog/versions/linux/server" 2>/dev/null \
-    | grep -oP '"recommended"\s*:\s*"\K[^"]+' | head -1)
-fi
-
-if [[ -z "$LATEST" ]]; then
-  error "Could not resolve latest build. Set FIVEM_BUILD env var manually:\n  export FIVEM_BUILD=21547-xxxxx && bash install.sh"
-fi
-
-log "Latest build: $LATEST"
-DOWNLOAD_URL="$ARTIFACTS_BASE/$LATEST/fx.tar.xz"
 warn "Downloading: $DOWNLOAD_URL"
-
 wget -q --show-progress -O /tmp/fx.tar.xz "$DOWNLOAD_URL" \
-  || error "Download failed. Check URL: $DOWNLOAD_URL"
+  || error "Download failed. Check URL:\n  $DOWNLOAD_URL"
 
 tar -xJf /tmp/fx.tar.xz -C "$SERVER_DIR"
 rm /tmp/fx.tar.xz
@@ -183,7 +183,7 @@ echo -e "${GREEN}"
 echo "  Install dir : $INSTALL_DIR"
 echo "  server.cfg  : $CFG"
 echo ""
-echo "  ⚠  EDIT server.cfg → ใส่ license key ก่อน!"
+echo "  ⚠  EDIT server.cfg → add your license key first!"
 echo "     https://keymaster.fivem.net"
 echo ""
 echo "  ── Start commands ──────────────────────────"
