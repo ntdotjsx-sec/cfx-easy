@@ -1,7 +1,6 @@
 #!/bin/bash
 # ============================================================
 #  FiveM Server Auto-Installer for Ubuntu
-#  Usage: bash <(curl -sSL https://raw.githubusercontent.com/YOUR/REPO/main/install-fivem.sh)
 # ============================================================
 
 set -e
@@ -21,12 +20,12 @@ header() { echo -e "\n${CYAN}═════════════════
 INSTALL_DIR="$HOME/FXServer"
 SERVER_DIR="$INSTALL_DIR/server"
 DATA_DIR="$INSTALL_DIR/server-data"
-ARTIFACTS_URL="https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master"
+ARTIFACTS_BASE="https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master"
+API_URL="https://changelogs-live.fivem.net/api/changelog/versions/linux/server"
 # ────────────────────────────────────────────────────────────
 
 header "FiveM Server Installer"
 
-# ── Root check ──────────────────────────────────────────────
 if [[ $EUID -eq 0 ]]; then
   warn "Running as root. Recommended to run as a normal user."
 fi
@@ -47,19 +46,42 @@ log "Directories created: $INSTALL_DIR"
 
 # ── Get latest artifact ──────────────────────────────────────
 header "Downloading Latest FiveM Artifacts"
-LATEST=$(curl -sSL "$ARTIFACTS_URL/" \
-  | grep -oP '(?<=href=")[0-9]+-[a-f0-9]+(?=/server.tar.xz)' \
-  | sort -t- -k1 -n \
-  | tail -1)
+
+# วิธีที่ 1: ดึงจาก FiveM API (เร็วและแม่นยำ)
+LATEST=$(curl -sSL --max-time 15 "$API_URL" 2>/dev/null | jq -r '.latest // empty' 2>/dev/null)
+
+# วิธีที่ 2: fallback — scrape HTML พร้อม User-Agent
+if [[ -z "$LATEST" ]]; then
+  warn "API method failed, trying HTML scrape..."
+  LATEST=$(curl -sSL --max-time 15 -A "Mozilla/5.0 (X11; Linux x86_64)" "$ARTIFACTS_BASE/" 2>/dev/null \
+    | grep -oP '(?<=href=")[0-9]+-[a-f0-9]+(?=/server\.tar\.xz)' \
+    | sort -t- -k1 -n \
+    | tail -1)
+fi
+
+# วิธีที่ 3: fallback — ดึงจาก recommend endpoint
+if [[ -z "$LATEST" ]]; then
+  warn "Scrape failed, trying recommend endpoint..."
+  LATEST=$(curl -sSL --max-time 15 "$ARTIFACTS_BASE/LATEST_RECOMMENDED" 2>/dev/null | tr -d '[:space:]')
+fi
 
 if [[ -z "$LATEST" ]]; then
-  error "Could not find latest artifact. Check your internet connection."
+  error "Could not find latest artifact. Please check https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/ and run again with BUILD variable:\n  BUILD=12345-abcdef bash install.sh"
+fi
+
+# รองรับกรณีที่ผู้ใช้กำหนด BUILD เองจากภายนอก
+if [[ -n "$BUILD" ]]; then
+  warn "Using manually specified build: $BUILD"
+  LATEST="$BUILD"
 fi
 
 log "Latest build: $LATEST"
-DOWNLOAD_URL="$ARTIFACTS_URL/$LATEST/server.tar.xz"
+DOWNLOAD_URL="$ARTIFACTS_BASE/$LATEST/server.tar.xz"
 
-wget -q --show-progress -O /tmp/fx-server.tar.xz "$DOWNLOAD_URL"
+log "Downloading from: $DOWNLOAD_URL"
+wget --max-redirect=5 --show-progress -O /tmp/fx-server.tar.xz "$DOWNLOAD_URL" || \
+  error "Download failed. Try manually: wget -O /tmp/fx-server.tar.xz \"$DOWNLOAD_URL\""
+
 tar -xJf /tmp/fx-server.tar.xz -C "$SERVER_DIR"
 rm /tmp/fx-server.tar.xz
 chmod +x "$SERVER_DIR/run.sh"
@@ -142,7 +164,7 @@ header "systemd Service (optional)"
 read -rp "Create systemd service for auto-start on boot? [y/N]: " CREATE_SERVICE
 if [[ "$CREATE_SERVICE" =~ ^[Yy]$ ]]; then
   SERVICE_FILE="/etc/systemd/system/fivem.service"
-  sudo tee "$SERVICE_FILE" > /dev/null << SVCEOF
+  tee "$SERVICE_FILE" > /dev/null << SVCEOF
 [Unit]
 Description=FiveM Server
 After=network.target
@@ -158,9 +180,9 @@ RestartSec=10
 [Install]
 WantedBy=multi-user.target
 SVCEOF
-  sudo systemctl daemon-reload
-  sudo systemctl enable fivem
-  log "systemd service created. Start with: sudo systemctl start fivem"
+  systemctl daemon-reload
+  systemctl enable fivem
+  log "systemd service created. Start with: systemctl start fivem"
 else
   warn "Skipped systemd. Use $INSTALL_DIR/screen-start.sh to launch manually."
 fi
