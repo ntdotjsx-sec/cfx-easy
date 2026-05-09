@@ -17,12 +17,12 @@ warn()   { echo -e "${YELLOW}[!]${NC} $1"; }
 error()  { echo -e "${RED}[✘]${NC} $1"; exit 1; }
 header() { echo -e "\n${CYAN}══════════════════════════════════════${NC}"; echo -e "${CYAN}  $1${NC}"; echo -e "${CYAN}══════════════════════════════════════${NC}"; }
 
-# ── Root check (ก่อน config เพราะต้องรู้ SUDO_USER) ─────────
+# ── Root check ───────────────────────────────────────────────
 if [[ $EUID -ne 0 ]]; then
   error "Please run as root: sudo bash install.sh"
 fi
 
-# ── Config ──────────────────────────────────────────────────
+# ── Config ───────────────────────────────────────────────────
 CURRENT_USER="${SUDO_USER:-$USER}"
 USER_HOME=$(getent passwd "$CURRENT_USER" | cut -d: -f6)
 INSTALL_DIR="$USER_HOME/FXServer"
@@ -37,9 +37,7 @@ warn "Install location: $INSTALL_DIR  (user: $CURRENT_USER)"
 # ── Dependencies ─────────────────────────────────────────────
 header "Installing Dependencies"
 apt-get update -qq
-apt-get install -y -qq \
-  curl wget git xz-utils \
-  screen tar jq > /dev/null
+apt-get install -y -qq curl wget git xz-utils tar jq > /dev/null
 log "Dependencies installed"
 
 # ── Create directories ───────────────────────────────────────
@@ -126,16 +124,15 @@ CFG_EOF
   log "server.cfg created: $CFG"
 fi
 
-# ── Start scripts ────────────────────────────────────────────
-header "Creating Start Scripts"
+# ── start.sh (auto-restart) ──────────────────────────────────
+header "Creating start.sh"
 
-# start.sh — with auto-restart loop
 cat > "$INSTALL_DIR/start.sh" << STARTEOF
 #!/bin/bash
 # ── FiveM Auto-Restart Wrapper ──────────────────
 CRASHES=0
 MAX_CRASHES=10
-CRASH_WINDOW=300   # วินาที — ถ้า crash เกิน MAX_CRASHES ใน window นี้ จะหยุด
+CRASH_WINDOW=300
 
 cd "$SERVER_DIR"
 
@@ -151,7 +148,6 @@ while true; do
 
   echo "[FiveM] Server exited (code: \$EXIT_CODE, uptime: \${UPTIME}s)"
 
-  # Reset crash counter ถ้า server อยู่ได้นานกว่า CRASH_WINDOW
   if [[ \$UPTIME -ge \$CRASH_WINDOW ]]; then
     CRASHES=0
   fi
@@ -168,16 +164,7 @@ while true; do
 done
 STARTEOF
 chmod +x "$INSTALL_DIR/start.sh"
-
-# screen-start.sh
-cat > "$INSTALL_DIR/screen-start.sh" << SCREENEOF
-#!/bin/bash
-screen -dmS fivem bash "$INSTALL_DIR/start.sh"
-echo "Started in screen 'fivem' — attach: screen -r fivem"
-SCREENEOF
-chmod +x "$INSTALL_DIR/screen-start.sh"
-
-log "start.sh (auto-restart) and screen-start.sh created"
+log "start.sh created"
 
 # ── Fix ownership ────────────────────────────────────────────
 chown -R "$CURRENT_USER":"$CURRENT_USER" "$INSTALL_DIR"
@@ -218,7 +205,7 @@ echo "  ⚠  EDIT server.cfg → add your license key first!"
 echo "     https://keymaster.fivem.net"
 echo ""
 echo "  ── Start commands ──────────────────────────"
-echo "  systemd : sudo systemctl start fivem"
-echo "  screen  : $INSTALL_DIR/screen-start.sh"
-echo "  logs    : sudo journalctl -u fivem -f"
+echo "  start  : sudo systemctl start fivem"
+echo "  stop   : sudo systemctl stop fivem"
+echo "  logs   : sudo journalctl -u fivem -f"
 echo -e "${NC}"
